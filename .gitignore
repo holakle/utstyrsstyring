@@ -1,14 +1,17 @@
-# dependencies
+# deps
 node_modules/
+**/node_modules/
+.pnpm/
+**/.pnpm/
 .pnpm-store/
 
-# builds
+# next/build
+.next/
 dist/
 build/
-.next/
 out/
 
-# env / secrets
+# env/secrets
 .env
 .env.*
 !.env.example
@@ -16,9 +19,5 @@ out/
 # logs
 *.log
 
-# OS
-.DS_Store
-
-# Prisma / DB (hvis du bruker sqlite lokalt)
-prisma/*.db
-prisma/*.db-journal
+# pnpm workspace state (generert)
+pnpm-workspace-state-v1.json
