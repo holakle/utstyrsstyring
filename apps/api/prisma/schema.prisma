@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  userTagId String   @unique
+  createdAt DateTime @default(now())
+  assetsHeld Asset[]  // En bruker kan holde mange assets
+}
+
+model Asset {
+  id           String   @id @default(cuid())
+  name         String
+  category     String?
+  assetTagId   String   @unique
+  status       String   @default("IN_WAREHOUSE")
+  holderUserId String?
+  holderUser   User?    @relation(fields: [holderUserId], references: [id])
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+}
+
+model Observation {
+  id        String   @id @default(cuid())
+  ts        DateTime
+  gatewayId String
+  zone      String
+  tagId     String
+  tagType   String
+  rssi      Int
+  createdAt DateTime @default(now())
+}
+
+model Event {
+  id         String   @id @default(cuid())
+  ts         DateTime
+  type       String
+  assetTagId String
+  userTagId  String?
+  confidence Float
+  details    Json?
+  createdAt  DateTime @default(now())
+}
