@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    container_name: utstyr_db
+    environment:
+      POSTGRES_USER: utstyr
+      POSTGRES_PASSWORD: utstyr
+      POSTGRES_DB: utstyr
+    ports:
+      - "5432:5432"
+    volumes:
+      - utstyr_db_data:/var/lib/postgresql/data
+volumes:
+  utstyr_db_data:

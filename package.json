@@ -1,0 +1,14 @@
+{
+  "name": "utstyrsstyring",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r dev",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "pnpm --filter api prisma:reset",
+    "lint": "pnpm -r lint"
+  },
+  "dependencies": {
+    "@utstyr/shared": "workspace:*"
+  }
+}

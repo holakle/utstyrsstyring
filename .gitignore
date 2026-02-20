@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+dist/
+build/
+.next/
+out/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+
+# OS
+.DS_Store
+
+# Prisma / DB (hvis du bruker sqlite lokalt)
+prisma/*.db
+prisma/*.db-journal
