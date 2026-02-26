@@ -7,23 +7,84 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  userTagId String   @unique
-  createdAt DateTime @default(now())
-  assetsHeld Asset[]  // En bruker kan holde mange assets
+  id          String       @id @default(cuid())
+  name        String
+  email       String?
+  userTagId   String       @unique
+  role        String       @default("USER")
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @default(now()) @updatedAt
+  assignments Assignment[]
+  assetsHeld  Asset[]
+}
+
+model Category {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  assetsRel Asset[] @relation("AssetCategory")
+}
+
+model Location {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  assetsRel Asset[] @relation("AssetLocation")
 }
 
 model Asset {
-  id           String   @id @default(cuid())
-  name         String
-  category     String?
-  assetTagId   String   @unique
-  status       String   @default("IN_WAREHOUSE")
+  id          String       @id @default(cuid())
+  name        String
+  assetTagId  String       @unique
+  category    String?
   holderUserId String?
-  holderUser   User?    @relation(fields: [holderUserId], references: [id])
-  updatedAt    DateTime @updatedAt
-  createdAt    DateTime @default(now())
+  holderUser  User?        @relation(fields: [holderUserId], references: [id])
+  serial      String?
+  airtagId    String?
+  status      String       @default("AVAILABLE")
+  categoryId  String?
+  locationId  String?
+  deletedAt   DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  categoryRel Category?    @relation("AssetCategory", fields: [categoryId], references: [id])
+  locationRel Location?    @relation("AssetLocation", fields: [locationId], references: [id])
+  assignments Assignment[]
+
+  @@index([status])
+  @@index([categoryId])
+  @@index([locationId])
+  @@index([deletedAt])
+}
+
+model Assignment {
+  id           String    @id @default(cuid())
+  assetId      String
+  userId       String
+  checkedOutAt DateTime  @default(now())
+  dueAt        DateTime?
+  returnedAt   DateTime?
+  asset        Asset     @relation(fields: [assetId], references: [id])
+  user         User      @relation(fields: [userId], references: [id])
+
+  @@index([assetId, returnedAt])
+  @@index([userId, returnedAt])
+  @@index([dueAt])
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  ts        DateTime @default(now())
+  type      String
+  assetTagId String?
+  userTagId String?
+  confidence Float?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([assetTagId])
+  @@index([userTagId])
+  @@index([createdAt])
 }
 
 model Observation {
@@ -35,15 +96,4 @@ model Observation {
   tagType   String
   rssi      Int
   createdAt DateTime @default(now())
-}
-
-model Event {
-  id         String   @id @default(cuid())
-  ts         DateTime
-  type       String
-  assetTagId String
-  userTagId  String?
-  confidence Float
-  details    Json?
-  createdAt  DateTime @default(now())
 }
