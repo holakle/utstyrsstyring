@@ -17,7 +17,9 @@ async function request(path: string, method: ApiMethod, body?: unknown, init?: R
     API ||
     (isServer
       ? process.env.API_INTERNAL_URL ?? "http://localhost:3001"
-      : `${window.location.protocol}//${window.location.hostname}:3001`);
+      : window.location.protocol === "https:"
+        ? `${window.location.origin}/api`
+        : `${window.location.protocol}//${window.location.hostname}:3001`);
   const cookieHeader = isServer
     ? await (async () => {
         const { cookies } = await import("next/headers");
@@ -65,6 +67,7 @@ export function apiDelete(path: string, init?: RequestInit) {
 export function getApiBase() {
   if (API) return API;
   if (typeof window !== "undefined") {
+    if (window.location.protocol === "https:") return `${window.location.origin}/api`;
     return `${window.location.protocol}//${window.location.hostname}:3001`;
   }
   return process.env.API_INTERNAL_URL ?? "http://localhost:3001";

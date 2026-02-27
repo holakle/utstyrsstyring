@@ -1,0 +1,19 @@
+{
+  admin off
+}
+
+http://{$LAN_HOST:localhost}, http://localhost {
+  redir https://{$LAN_HOST:localhost}{uri}
+}
+
+https://{$LAN_HOST:localhost}, https://localhost {
+  tls internal
+
+  @api path /api/*
+  handle @api {
+    uri strip_prefix /api
+    reverse_proxy host.docker.internal:3001
+  }
+
+  reverse_proxy host.docker.internal:3000
+}

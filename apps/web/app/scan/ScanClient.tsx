@@ -138,19 +138,13 @@ export default function ScanClient() {
   }, [handleDetected]);
 
   async function startZXingScanner() {
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      throw new Error(
+        "Kamera er ikke tilgjengelig i denne konteksten. Pa mobil over LAN kreves vanligvis HTTPS (eller localhost).",
+      );
+    }
     if (!videoRef.current) throw new Error("Klarte ikke initialisere video");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
-    });
-    streamRef.current = stream;
-    videoRef.current.srcObject = stream;
     videoRef.current.setAttribute("playsinline", "true");
-    await videoRef.current.play();
 
     const reader = new BrowserMultiFormatReader();
     zxingRef.current = reader;
@@ -158,19 +152,35 @@ export default function ScanClient() {
     setIsScanning(true);
     setScannerMode("zxing");
 
-    zxingControlsRef.current = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, err) => {
-      if (!scanActiveRef.current) return;
-      if (result) {
-        void handleDetected(result.getText());
-        return;
-      }
-      if (err && (err as Error).name !== "NotFoundException") {
-        setScanError(err.message);
-      }
-    });
+    zxingControlsRef.current = await reader.decodeFromConstraints(
+      {
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      },
+      videoRef.current,
+      (result, err) => {
+        if (!scanActiveRef.current) return;
+        if (result) {
+          void handleDetected(result.getText());
+          return;
+        }
+        if (err && (err as Error).name !== "NotFoundException") {
+          setScanError(err.message);
+        }
+      },
+    );
   }
 
   async function startNativeScanner() {
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      throw new Error(
+        "Kamera er ikke tilgjengelig i denne konteksten. Pa mobil over LAN kreves vanligvis HTTPS (eller localhost).",
+      );
+    }
     const Detector = (window as { BarcodeDetector?: BarcodeDetectorCtor }).BarcodeDetector;
     if (!Detector) throw new Error("BarcodeDetector er ikke tilgjengelig");
     if (!videoRef.current) throw new Error("Klarte ikke initialisere video");
@@ -212,7 +222,7 @@ export default function ScanClient() {
       } catch (nativeError) {
         const zxingMsg = zxingError instanceof Error ? zxingError.message : "ZXing failed";
         const nativeMsg = nativeError instanceof Error ? nativeError.message : "Native failed";
-        throw new Error(`Skanner feilet. ZXing: ${zxingMsg}. Native: ${nativeMsg}`);
+        setScanError(`Skanner feilet. ZXing: ${zxingMsg}. Native: ${nativeMsg}`);
       }
     } finally {
       setIsStarting(false);

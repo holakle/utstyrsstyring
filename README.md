@@ -14,42 +14,93 @@ Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\
 Sider:
 - Web: http://localhost:3000
 - API: http://localhost:3001
-- Login: http://localhost:3000/login
 
-## Innlogging (ny)
+## Full lokal HTTPS (for mobilkamera)
 
-Systemet bruker nå session-cookie med brukernavn/passord.
+Malkjede:
+- Next dev: `http://localhost:3000`
+- API dev: `http://localhost:3001`
+- Caddy HTTPS proxy: `https://<LAN_HOST>` (TLS + proxy for web og `/api`)
 
-Standard på eksisterende DB (etter migrering):
-- Admin: `admin001` / `changeme123`
-
-Etter `POST /seed` opprettes også:
-- Admin PC: `adminpc` / `${SEED_ADMIN_PASSWORD:-admin123}`
-- Admin Mobil: `adminmobile` / `${SEED_ADMIN_PASSWORD:-admin123}`
-- User 1: `user1` / `${SEED_USER_PASSWORD:-user123}`
-- User 2: `user2` / `${SEED_USER_PASSWORD:-user123}`
-
-Tips:
-- Logg inn som `adminmobile` på telefon og `adminpc` på PC for to separate admin-sesjoner.
-
-## LAN-oppsett (PC som host, test på mobil)
-
-For LAN i dev bruker prosjektet:
-- Web på `0.0.0.0:3000`
-- API på `0.0.0.0:${API_PORT:-3001}`
-
-Anbefalte env-verdier i `apps/api/.env`:
+### 1) Sett LAN-host i repo-root `.env`
 
 ```env
-API_PORT=3001
-CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://<DIN-LAN-IP>:3000
+LAN_HOST=192.168.10.123
+SESSION_COOKIE_SECURE=true
 ```
 
-Slik tester du fra mobil:
-1. Finn PC-IP med `ipconfig` (IPv4).
-2. Start web + api + db.
-3. Åpne `http://<DIN-LAN-IP>:3000` på mobil (samme Wi-Fi).
-4. Hvis siden ikke åpner: åpne Windows Firewall for TCP `3000` og `3001`.
+Bruk faktisk IPv4-adresse til PC-en din.
+
+### 2) Start tjenester
+
+```powershell
+docker compose up -d
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter api start:dev'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter web dev'
+```
+
+### 3) Eksporter lokal CA fra Caddy og installer på mobil
+
+Kopier CA fra container:
+```powershell
+docker cp utstyr_https:/data/caddy/pki/authorities/local/root.crt .\caddy-root.crt
+```
+
+Installer og stol pa sertifikatet på mobilen:
+- iOS: installer profil + aktiver full trust under `Settings > General > About > Certificate Trust Settings`.
+- Android: installer som CA-sertifikat i sikkerhetsinnstillinger.
+
+### 4) Bruk HTTPS-url på mobil
+
+- `https://<LAN_HOST>/login`
+- `https://<LAN_HOST>/scan`
+
+Merk:
+- Frontend bruker automatisk `/api` over samme HTTPS-origin.
+- Hvis kamera fortsatt blokkeres, sjekk at url faktisk starter med `https://`.
+
+## Tunnel mode (ingen installasjon pa mobil)
+
+Bruk dette hvis du ikke vil installere lokal CA/sertifikat på mobilen.
+Da får du en offentlig `https://...` URL med gyldig sertifikat.
+
+### Restart før tunnel-test
+
+1. Sett root `.env`:
+```env
+LAN_HOST=192.168.10.103
+SESSION_COOKIE_SECURE=true
+```
+
+2. Restart tjenester:
+```powershell
+docker compose up -d --force-recreate https
+docker compose up -d db
+
+Get-NetTCPConnection -LocalPort 3000,3001 -State Listen -ErrorAction SilentlyContinue |
+  Select-Object -ExpandProperty OwningProcess -Unique |
+  ForEach-Object { taskkill /PID $_ /F }
+
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter api start:dev'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter web dev'
+```
+
+### Start tunnel (Cloudflare, raskest)
+
+```powershell
+docker run --rm cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://host.docker.internal:3000
+```
+
+Cloudflared skriver ut en URL som ligner:
+- `https://xxxxx.trycloudflare.com`
+
+Bruk denne på mobil:
+- `https://xxxxx.trycloudflare.com/login`
+- `https://xxxxx.trycloudflare.com/scan`
+
+Merk:
+- Tunnel mode bruker Next.js rewrite `/api/* -> http://localhost:3001/*`.
+- Dette unngår redirect-loop gjennom lokal HTTPS-proxy.
 
 ## Shutdown (web + api + db)
 
@@ -68,33 +119,6 @@ try { (Invoke-WebRequest -Uri 'http://localhost:3000/' -UseBasicParsing -Timeout
 try { (Invoke-WebRequest -Uri 'http://localhost:3001/' -UseBasicParsing -TimeoutSec 10).StatusCode } catch { "API ERR: $($_.Exception.Message)" }
 ```
 
-## Pilot: mobilskanning (ny)
-
-Skanneside:
-- Web: `http://localhost:3000/scan`
-
-Hva den gjør nå:
-- Starter mobilkamera og bruker ZXing som primær live-deteksjon (fallback til native `BarcodeDetector`).
-- Slår opp kode i API via `POST /scan/lookup`.
-- Lar deg knytte koden til valgt gjenstand via `PATCH /assets/:id` (lagres i `barcode`).
-- Hver gjenstandsside (`/assets/[id]`) viser nå synlig scannbar strekkode for test.
-
-### Test på mobil i LAN
-
-1. Start web/API som vanlig.
-2. Finn PC-IP i lokalnettet:
-```powershell
-ipconfig
-```
-3. Åpne på mobil (samme Wi-Fi):
-- `http://<DIN-LAN-IP>:3000/scan`
-4. Gi kameratillatelse i nettleseren.
-
-Tips:
-- Chrome på mobil har best støtte for denne piloten.
-- Hvis live deteksjon ikke er tilgjengelig i nettleseren, bruk manuell kode-input på samme side.
-- For rask test: åpne en gjenstand på PC, vis strekkoden på skjermen, og skann den fra mobil.
-
 ## Backlog: mobilscanning (pilot senere)
 
 ### Gjøremål
@@ -104,7 +128,7 @@ Tips:
 - [ ] Legg til enkel "Skann strekkode"-knapp på gjenstandsside (`/assets/[id]`), mobil først.
 - [ ] Valider at samme kode ikke kan knyttes til flere gjenstander.
 
-### Verktøy undersøkt (for live deteksjon)
+### Verktøy undersøkt (for live deteksjon av qr kod)
 
 1. Native `BarcodeDetector` API (web)
 - Fordel: null ekstra bibliotek, rask å teste.
