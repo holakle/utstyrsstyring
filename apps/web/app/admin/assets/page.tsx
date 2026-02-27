@@ -1,11 +1,14 @@
 import AdminAssetActions from "../AdminAssetActions";
-import { adminHeaders, apiGet } from "../../lib/api";
+import { apiGet } from "../../lib/api";
+import { requireAdmin } from "../../lib/session";
 
 export default async function AdminAssetsPage() {
+  await requireAdmin();
+
   const [assets, users, activeAssignments] = await Promise.all([
-    apiGet("/assets", { headers: adminHeaders }),
-    apiGet("/users", { headers: adminHeaders }),
-    apiGet("/assignments/active", { headers: adminHeaders }),
+    apiGet("/assets"),
+    apiGet("/users"),
+    apiGet("/assignments/active"),
   ]);
 
   const activeMap = new Map<string, any>();

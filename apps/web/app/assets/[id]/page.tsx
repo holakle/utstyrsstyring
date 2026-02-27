@@ -1,21 +1,29 @@
 import { apiGet } from "../../lib/api";
+import { requireAuth } from "../../lib/session";
+import BarcodePreview from "./BarcodePreview";
 
 type Params = Promise<{ id: string }>;
 
 export default async function AssetDetailPage({ params }: { params: Params }) {
+  await requireAuth();
   const { id } = await params;
   const [asset, history] = await Promise.all([apiGet(`/assets/${id}`), apiGet(`/assets/${id}/history`)]);
+  const barcodeValue = asset.barcode ?? asset.assetTagId;
 
   return (
     <section className="grid" style={{ gap: 14 }}>
       <div className="card">
         <h2>{asset.name}</h2>
         <p className="muted">Tag: {asset.assetTagId}</p>
+        <p className="muted">Barcode: {barcodeValue}</p>
         <div className="row">
           <span className={`badge ${asset.status === "AVAILABLE" ? "ok" : "warn"}`}>{asset.status}</span>
           <span className="badge">Kategori: {asset.category?.name ?? "-"}</span>
           <span className="badge">Lokasjon: {asset.location?.name ?? "-"}</span>
           {asset.assignments?.[0] && <span className="badge warn">Aktiv: {asset.assignments[0].user.name}</span>}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <BarcodePreview value={barcodeValue} />
         </div>
       </div>
 

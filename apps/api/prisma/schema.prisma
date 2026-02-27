@@ -9,6 +9,8 @@ datasource db {
 model User {
   id          String       @id @default(cuid())
   name        String
+  username    String       @unique
+  passwordHash String
   email       String?
   userTagId   String       @unique
   role        String       @default("USER")
@@ -17,6 +19,7 @@ model User {
   updatedAt   DateTime     @default(now()) @updatedAt
   assignments Assignment[]
   assetsHeld  Asset[]
+  sessions    Session[]
 }
 
 model Category {
@@ -35,6 +38,7 @@ model Asset {
   id          String       @id @default(cuid())
   name        String
   assetTagId  String       @unique
+  barcode     String?      @unique
   category    String?
   holderUserId String?
   holderUser  User?        @relation(fields: [holderUserId], references: [id])
@@ -96,4 +100,17 @@ model Observation {
   tagType   String
   rssi      Int
   createdAt DateTime @default(now())
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  tokenHash    String   @unique
+  userId       String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }

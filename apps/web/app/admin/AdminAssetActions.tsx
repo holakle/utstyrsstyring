@@ -2,13 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
-const headers = {
-  "Content-Type": "application/json",
-  "x-user-role": "ADMIN",
-  "x-user-tag": "ADMIN001",
-};
+import { getApiBase } from "../lib/api";
 
 export default function AdminAssetActions({ users, assets }: { users: any[]; assets: any[] }) {
   const router = useRouter();
@@ -22,9 +16,12 @@ export default function AdminAssetActions({ users, assets }: { users: any[]; ass
   async function post(path: string, body?: unknown, method = "POST") {
     setBusy(true);
     try {
-      const res = await fetch(`${API}${path}`, {
+      const res = await fetch(`${getApiBase()}${path}`, {
         method,
-        headers,
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: body ? JSON.stringify(body) : undefined,
       });
       if (!res.ok) {

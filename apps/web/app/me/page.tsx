@@ -1,7 +1,9 @@
-import { apiGet, userHeaders } from "../lib/api";
+import { apiGet } from "../lib/api";
+import { requireAuth } from "../lib/session";
 
 export default async function MePage() {
-  const me = await apiGet("/me", { headers: userHeaders });
+  await requireAuth();
+  const me = await apiGet("/me");
   const [active, events] = await Promise.all([
     apiGet(`/assignments/active?userId=${me.id}`),
     apiGet(`/events?userId=${me.id}`),

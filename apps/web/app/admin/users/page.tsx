@@ -1,8 +1,10 @@
-import { adminHeaders, apiGet } from "../../lib/api";
+import { apiGet } from "../../lib/api";
+import { requireAdmin } from "../../lib/session";
 import AdminUsersClient from "./AdminUsersClient";
 
 export default async function AdminUsersPage() {
-  const users = await apiGet("/users", { headers: adminHeaders });
+  await requireAdmin();
+  const users = await apiGet("/users");
 
   return (
     <section className="grid" style={{ gap: 14 }}>

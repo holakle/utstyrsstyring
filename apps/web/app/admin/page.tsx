@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { adminHeaders, apiGet } from "../lib/api";
+import { apiGet } from "../lib/api";
+import { requireAdmin } from "../lib/session";
 
 export default async function AdminPage() {
+  await requireAdmin();
   const [assets, active, events] = await Promise.all([
-    apiGet("/assets", { headers: adminHeaders }),
-    apiGet("/assignments/active", { headers: adminHeaders }),
-    apiGet("/events", { headers: adminHeaders }),
+    apiGet("/assets"),
+    apiGet("/assignments/active"),
+    apiGet("/events"),
   ]);
 
   const overdue = active.filter((a: any) => a.dueAt && new Date(a.dueAt).getTime() < Date.now()).length;

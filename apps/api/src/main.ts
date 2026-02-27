@@ -4,11 +4,19 @@ import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+  const origins = (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
 
-  const port = 3001; // <-- hardcode for å unngå env-trøbbel i starten
-  await app.listen(port);
+  app.enableCors({
+    origin: origins.length ? origins : true,
+    credentials: true,
+  });
 
-  console.log(`API running on http://localhost:${port}`);
+  const port = Number(process.env.API_PORT ?? 3001);
+  await app.listen(port, "0.0.0.0");
+
+  console.log(`API running on http://0.0.0.0:${port}`);
 }
 bootstrap();

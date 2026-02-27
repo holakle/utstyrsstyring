@@ -2,17 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
-const adminHeaders = {
-  "Content-Type": "application/json",
-  "x-user-role": "ADMIN",
-  "x-user-tag": "ADMIN001",
-};
+import { getApiBase } from "../../lib/api";
 
 export default function AdminUsersClient({ users }: { users: any[] }) {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [userTagId, setUserTagId] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,13 +17,16 @@ export default function AdminUsersClient({ users }: { users: any[] }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const res = await fetch(`${API}/users`, {
+      const res = await fetch(`${getApiBase()}/users`, {
         method: "POST",
-        headers: adminHeaders,
-        body: JSON.stringify({ name, userTagId, email }),
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, username, password, userTagId, email }),
       });
       if (!res.ok) throw new Error(await res.text());
       setName("");
+      setUsername("");
+      setPassword("");
       setUserTagId("");
       setEmail("");
       router.refresh();
@@ -41,9 +40,10 @@ export default function AdminUsersClient({ users }: { users: any[] }) {
   async function setActive(id: string, isActive: boolean) {
     setBusy(true);
     try {
-      const res = await fetch(`${API}/users/${id}`, {
+      const res = await fetch(`${getApiBase()}/users/${id}`, {
         method: "PATCH",
-        headers: adminHeaders,
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -61,6 +61,14 @@ export default function AdminUsersClient({ users }: { users: any[] }) {
         <h3>Opprett bruker</h3>
         <form className="row" onSubmit={postUser}>
           <input required placeholder="Navn" value={name} onChange={(e) => setName(e.target.value)} />
+          <input required placeholder="Brukernavn" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input
+            required
+            placeholder="Passord"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
           <input required placeholder="UserTag" value={userTagId} onChange={(e) => setUserTagId(e.target.value)} />
           <input placeholder="E-post" value={email} onChange={(e) => setEmail(e.target.value)} />
           <button className="primary" type="submit" disabled={busy}>
@@ -74,6 +82,7 @@ export default function AdminUsersClient({ users }: { users: any[] }) {
           <thead>
             <tr>
               <th>Navn</th>
+              <th>Brukernavn</th>
               <th>Tag</th>
               <th>Rolle</th>
               <th>Aktiv</th>
@@ -85,6 +94,7 @@ export default function AdminUsersClient({ users }: { users: any[] }) {
             {users.map((u) => (
               <tr key={u.id}>
                 <td>{u.name}</td>
+                <td>{u.username}</td>
                 <td>{u.userTagId}</td>
                 <td>{u.role}</td>
                 <td>{u.isActive ? "Ja" : "Nei"}</td>

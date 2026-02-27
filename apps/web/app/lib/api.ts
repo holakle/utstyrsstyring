@@ -1,69 +1,71 @@
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-export async function apiGet(path: string, init?: RequestInit) {
-  const res = await fetch(`${API}${path}`, {
+type ApiMethod = "GET" | "POST" | "PATCH" | "DELETE";
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
+
+async function request(path: string, method: ApiMethod, body?: unknown, init?: RequestInit) {
+  const isServer = typeof window === "undefined";
+  const apiBase =
+    API ||
+    (isServer
+      ? process.env.API_INTERNAL_URL ?? "http://localhost:3001"
+      : `${window.location.protocol}//${window.location.hostname}:3001`);
+  const cookieHeader = isServer
+    ? await (async () => {
+        const { cookies } = await import("next/headers");
+        return (await cookies()).toString();
+      })()
+    : undefined;
+  const headers: Record<string, string> = {
+    ...(body ? { "Content-Type": "application/json" } : {}),
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+  };
+
+  const res = await fetch(`${apiBase}${path}`, {
+    method,
     cache: "no-store",
+    credentials: "include",
     ...init,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GET ${path} failed (${res.status}): ${text}`);
-  }
-  return res.json();
-}
-
-export async function apiPost(path: string, body?: unknown, init?: RequestInit) {
-  const res = await fetch(`${API}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
-    ...init,
   });
+
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`POST ${path} failed (${res.status}): ${text}`);
+    throw new ApiError(`${method} ${path} failed (${res.status}): ${text}`, res.status);
   }
   return res.json();
 }
 
-export async function apiPatch(path: string, body?: unknown, init?: RequestInit) {
-  const res = await fetch(`${API}${path}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-    ...init,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`PATCH ${path} failed (${res.status}): ${text}`);
-  }
-  return res.json();
+export function apiGet(path: string, init?: RequestInit) {
+  return request(path, "GET", undefined, init);
 }
 
-export async function apiDelete(path: string, init?: RequestInit) {
-  const res = await fetch(`${API}${path}`, {
-    method: "DELETE",
-    ...init,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`DELETE ${path} failed (${res.status}): ${text}`);
-  }
-  return res.json();
+export function apiPost(path: string, body?: unknown, init?: RequestInit) {
+  return request(path, "POST", body, init);
 }
 
-export const adminHeaders = {
-  "x-user-role": "ADMIN",
-  "x-user-tag": "ADMIN001",
-};
+export function apiPatch(path: string, body?: unknown, init?: RequestInit) {
+  return request(path, "PATCH", body, init);
+}
 
-export const userHeaders = {
-  "x-user-role": "USER",
-  "x-user-tag": "U001",
-};
+export function apiDelete(path: string, init?: RequestInit) {
+  return request(path, "DELETE", undefined, init);
+}
+
+export function getApiBase() {
+  if (API) return API;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:3001`;
+  }
+  return process.env.API_INTERNAL_URL ?? "http://localhost:3001";
+}

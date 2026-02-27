@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
+import LogoutButton from "./LogoutButton";
+import { apiGet, ApiError } from "./lib/api";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,11 +20,20 @@ export const metadata: Metadata = {
   description: "Admin- og brukerflate for utstyrsstyring",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  let me: { name: string; role: string } | null = null;
+  try {
+    me = await apiGet("/auth/me");
+  } catch (error) {
+    if (!(error instanceof ApiError && (error.status === 401 || error.status === 403))) {
+      throw error;
+    }
+  }
+
   return (
     <html lang="no">
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
@@ -30,12 +41,23 @@ export default function RootLayout({
           <header className="topbar">
             <h1>Utstyrsstyring</h1>
             <nav>
-              <Link href="/assets">Utstyr</Link>
-              <Link href="/me">Min side</Link>
-              <Link href="/admin">Admin</Link>
-              <Link href="/admin/assets">Admin utstyr</Link>
-              <Link href="/admin/users">Admin brukere</Link>
+              {me ? (
+                <>
+                  <Link href="/assets">Utstyr</Link>
+                  <Link href="/scan">Skann</Link>
+                  <Link href="/me">Min side</Link>
+                  {me.role === "ADMIN" ? <Link href="/admin">Admin</Link> : null}
+                  {me.role === "ADMIN" ? <Link href="/admin/assets">Admin utstyr</Link> : null}
+                  {me.role === "ADMIN" ? <Link href="/admin/users">Admin brukere</Link> : null}
+                </>
+              ) : (
+                <Link href="/login">Logg inn</Link>
+              )}
             </nav>
+            <div className="row">
+              {me ? <span className="muted">{me.name}</span> : null}
+              {me ? <LogoutButton /> : null}
+            </div>
           </header>
           <main className="content">{children}</main>
         </div>

@@ -3,24 +3,34 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
   Query,
+  Req,
+  Res,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "./prisma/prisma.service";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import type { Request, Response } from "express";
 
-type Actor = {
+type AuthUser = {
+  id: string;
   role: "ADMIN" | "USER";
-  userTagId?: string;
+  userTagId: string;
+  username: string;
+  name: string;
+  isActive: boolean;
 };
 
 @Controller()
 export class AppController {
   constructor(private readonly prisma: PrismaService) {}
+  private readonly sessionCookie = "utstyr_session";
 
   private mapPrismaError(error: unknown): never {
     const knownError = error as { code?: string; meta?: { target?: string[] } } | undefined;
@@ -34,18 +44,91 @@ export class AppController {
     throw error;
   }
 
-  private getActor(headers: Record<string, string | string[] | undefined>): Actor {
-    const roleHeader = headers["x-user-role"];
-    const tagHeader = headers["x-user-tag"];
-    const role = (Array.isArray(roleHeader) ? roleHeader[0] : roleHeader)?.toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
-    const userTagId = Array.isArray(tagHeader) ? tagHeader[0] : tagHeader;
-    return { role, userTagId };
+  private hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
+    const hash = scryptSync(password, salt, 64).toString("hex");
+    return `scrypt$${salt}$${hash}`;
   }
 
-  private ensureAdmin(actor: Actor) {
-    if (actor.role !== "ADMIN") {
-      throw new BadRequestException("Admin role is required for this endpoint");
+  private verifyPassword(password: string, passwordHash: string) {
+    const [algo, salt, stored] = passwordHash.split("$");
+    if (algo !== "scrypt" || !salt || !stored) return false;
+    const computed = scryptSync(password, salt, 64).toString("hex");
+    const a = Buffer.from(stored, "hex");
+    const b = Buffer.from(computed, "hex");
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  private hashToken(token: string) {
+    return createHash("sha256").update(token).digest("hex");
+  }
+
+  private readCookie(req: Request, key: string) {
+    const cookie = req.headers.cookie;
+    if (!cookie) return undefined;
+    const pairs = cookie.split(";").map((part) => part.trim());
+    for (const pair of pairs) {
+      const [k, ...rest] = pair.split("=");
+      if (k === key) return decodeURIComponent(rest.join("="));
     }
+    return undefined;
+  }
+
+  private async resolveUser(req: Request): Promise<AuthUser> {
+    const token = this.readCookie(req, this.sessionCookie);
+    if (!token) throw new UnauthorizedException("Not authenticated");
+    const tokenHash = this.hashToken(token);
+
+    const session = await this.prisma.session.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+    if (!session || session.expiresAt.getTime() <= Date.now()) {
+      if (session) await this.prisma.session.delete({ where: { id: session.id } });
+      throw new UnauthorizedException("Session is invalid or expired");
+    }
+    if (!session.user.isActive) throw new ForbiddenException("User is inactive");
+
+    await this.prisma.session.update({
+      where: { id: session.id },
+      data: { lastSeenAt: new Date() },
+    });
+
+    return {
+      id: session.user.id,
+      role: session.user.role === "ADMIN" ? "ADMIN" : "USER",
+      userTagId: session.user.userTagId,
+      username: session.user.username,
+      name: session.user.name,
+      isActive: session.user.isActive,
+    };
+  }
+
+  private async requireAdmin(req: Request) {
+    const user = await this.resolveUser(req);
+    if (user.role !== "ADMIN") throw new ForbiddenException("Admin role is required for this endpoint");
+    return user;
+  }
+
+  private setSessionCookie(res: Response, token: string) {
+    const isSecure = (process.env.SESSION_COOKIE_SECURE ?? "false").toLowerCase() === "true";
+    const maxAgeDays = Number(process.env.SESSION_MAX_AGE_DAYS ?? 7);
+    const maxAgeMs = Math.max(1, maxAgeDays) * 24 * 60 * 60 * 1000;
+    res.cookie(this.sessionCookie, token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isSecure,
+      path: "/",
+      maxAge: maxAgeMs,
+    });
+  }
+
+  private clearSessionCookie(res: Response) {
+    res.clearCookie(this.sessionCookie, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: (process.env.SESSION_COOKIE_SECURE ?? "false").toLowerCase() === "true",
+      path: "/",
+    });
   }
 
   private async enrichEvents(events: any[]) {
@@ -73,22 +156,87 @@ export class AppController {
     };
   }
 
-  @Get("me")
-  async me(@Headers() headers: Record<string, string | string[] | undefined>) {
-    const actor = this.getActor(headers);
-    const user = await this.prisma.user.findUnique({
-      where: { userTagId: actor.userTagId ?? "U001" },
+  @Post("auth/login")
+  async login(
+    @Body() body: { username?: string; password?: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const username = body.username?.trim().toLowerCase();
+    const password = body.password ?? "";
+    if (!username || !password) throw new BadRequestException("username and password are required");
+
+    const user = await this.prisma.user.findUnique({ where: { username } });
+    if (!user || !user.isActive) throw new UnauthorizedException("Invalid credentials");
+    if (!this.verifyPassword(password, user.passwordHash)) throw new UnauthorizedException("Invalid credentials");
+
+    const token = randomBytes(32).toString("hex");
+    const tokenHash = this.hashToken(token);
+    const maxAgeDays = Number(process.env.SESSION_MAX_AGE_DAYS ?? 7);
+    const expiresAt = new Date(Date.now() + Math.max(1, maxAgeDays) * 24 * 60 * 60 * 1000);
+
+    await this.prisma.session.create({
+      data: {
+        tokenHash,
+        userId: user.id,
+        expiresAt,
+      },
     });
-    if (!user) throw new BadRequestException("No user found for current session");
-    return user;
+    this.setSessionCookie(res, token);
+
+    return { id: user.id, username: user.username, name: user.name, role: user.role };
+  }
+
+  @Post("auth/logout")
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const token = this.readCookie(req, this.sessionCookie);
+    if (token) {
+      const tokenHash = this.hashToken(token);
+      await this.prisma.session.deleteMany({ where: { tokenHash } });
+    }
+    this.clearSessionCookie(res);
+    return { ok: true };
+  }
+
+  @Get("auth/me")
+  async authMe(@Req() req: Request) {
+    const me = await this.resolveUser(req);
+    return me;
+  }
+
+  @Get("me")
+  async me(@Req() req: Request) {
+    const me = await this.resolveUser(req);
+    return this.prisma.user.findUniqueOrThrow({
+      where: { id: me.id },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        userTagId: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
   }
 
   @Get("users")
-  async users(@Headers() headers: Record<string, string | string[] | undefined>) {
-    this.ensureAdmin(this.getActor(headers));
+  async users(@Req() req: Request) {
+    await this.requireAdmin(req);
     return this.prisma.user.findMany({
       orderBy: { name: "asc" },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        userTagId: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
         assignments: {
           where: { returnedAt: null },
           include: { asset: true },
@@ -100,46 +248,78 @@ export class AppController {
 
   @Post("users")
   async createUser(
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Body() body: { name: string; email?: string; userTagId: string; role?: "ADMIN" | "USER" },
+    @Req() req: Request,
+    @Body() body: { name: string; username: string; password: string; email?: string; userTagId: string; role?: "ADMIN" | "USER" },
   ) {
-    this.ensureAdmin(this.getActor(headers));
-    if (!body.name || !body.userTagId) throw new BadRequestException("name and userTagId are required");
-    return this.prisma.user.create({
+    await this.requireAdmin(req);
+    if (!body.name || !body.userTagId || !body.username || !body.password) {
+      throw new BadRequestException("name, userTagId, username and password are required");
+    }
+    const created = await this.prisma.user.create({
       data: {
         name: body.name,
+        username: body.username.trim().toLowerCase(),
+        passwordHash: this.hashPassword(body.password),
         email: body.email,
         userTagId: body.userTagId,
         role: body.role ?? "USER",
+      },
+    });
+    return this.prisma.user.findUniqueOrThrow({
+      where: { id: created.id },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        userTagId: true,
+        role: true,
+        isActive: true,
       },
     });
   }
 
   @Patch("users/:id")
   async updateUser(
-    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Req() req: Request,
     @Param("id") id: string,
-    @Body() body: { name?: string; email?: string; role?: "ADMIN" | "USER"; isActive?: boolean },
+    @Body() body: { name?: string; username?: string; password?: string; email?: string; role?: "ADMIN" | "USER"; isActive?: boolean },
   ) {
-    this.ensureAdmin(this.getActor(headers));
-    return this.prisma.user.update({
+    await this.requireAdmin(req);
+    const updated = await this.prisma.user.update({
       where: { id },
       data: {
         name: body.name,
+        username: body.username?.trim().toLowerCase(),
+        ...(body.password ? { passwordHash: this.hashPassword(body.password) } : {}),
         email: body.email,
         role: body.role,
         isActive: body.isActive,
+      },
+    });
+    return this.prisma.user.findUniqueOrThrow({
+      where: { id: updated.id },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        userTagId: true,
+        role: true,
+        isActive: true,
       },
     });
   }
 
   @Get("assets")
   async assets(
+    @Req() req: Request,
     @Query("search") search?: string,
     @Query("status") status?: string,
     @Query("category") category?: string,
     @Query("location") location?: string,
   ) {
+    await this.resolveUser(req);
     const where: Prisma.AssetWhereInput = {
       deletedAt: null,
       ...(status ? { status } : {}),
@@ -148,6 +328,7 @@ export class AppController {
             OR: [
               { name: { contains: search, mode: "insensitive" } },
               { assetTagId: { contains: search, mode: "insensitive" } },
+              { barcode: { contains: search, mode: "insensitive" } },
               { serial: { contains: search, mode: "insensitive" } },
             ],
           }
@@ -173,7 +354,8 @@ export class AppController {
   }
 
   @Get("assets/:id")
-  async assetById(@Param("id") id: string) {
+  async assetById(@Req() req: Request, @Param("id") id: string) {
+    await this.resolveUser(req);
     const asset = await this.prisma.asset.findUnique({
       where: { id },
       include: {
@@ -192,7 +374,8 @@ export class AppController {
   }
 
   @Get("assets/:id/history")
-  async assetHistory(@Param("id") id: string) {
+  async assetHistory(@Req() req: Request, @Param("id") id: string) {
+    await this.resolveUser(req);
     const asset = await this.prisma.asset.findUnique({ where: { id } });
     if (!asset) throw new BadRequestException("Asset not found");
 
@@ -214,12 +397,13 @@ export class AppController {
 
   @Post("assets")
   async createAsset(
-    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Req() req: Request,
     @Body()
     body: {
       name: string;
       assetTagId: string;
       status?: string;
+      barcode?: string;
       serial?: string;
       airtagId?: string;
       category?: string;
@@ -227,7 +411,7 @@ export class AppController {
       locationId?: string;
     },
   ) {
-    this.ensureAdmin(this.getActor(headers));
+    await this.requireAdmin(req);
     const name = body.name?.trim();
     const assetTagId = body.assetTagId?.trim();
     if (!name || !assetTagId) throw new BadRequestException("name and assetTagId are required");
@@ -236,6 +420,7 @@ export class AppController {
         data: {
           name,
           assetTagId,
+          barcode: body.barcode?.trim() || assetTagId,
           status: body.status ?? "AVAILABLE",
           serial: body.serial?.trim() || undefined,
           airtagId: body.airtagId?.trim() || undefined,
@@ -251,12 +436,13 @@ export class AppController {
 
   @Patch("assets/:id")
   async updateAsset(
-    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Req() req: Request,
     @Param("id") id: string,
     @Body()
     body: {
       name?: string;
       status?: string;
+      barcode?: string;
       serial?: string;
       airtagId?: string;
       category?: string;
@@ -264,12 +450,13 @@ export class AppController {
       locationId?: string;
     },
   ) {
-    this.ensureAdmin(this.getActor(headers));
+    await this.requireAdmin(req);
     return this.prisma.asset.update({
       where: { id },
       data: {
         name: body.name,
         status: body.status,
+        barcode: body.barcode?.trim(),
         serial: body.serial,
         airtagId: body.airtagId,
         category: body.category,
@@ -280,8 +467,8 @@ export class AppController {
   }
 
   @Delete("assets/:id")
-  async deleteAsset(@Headers() headers: Record<string, string | string[] | undefined>, @Param("id") id: string) {
-    this.ensureAdmin(this.getActor(headers));
+  async deleteAsset(@Req() req: Request, @Param("id") id: string) {
+    await this.requireAdmin(req);
     return this.prisma.asset.update({
       where: { id },
       data: { deletedAt: new Date(), status: "RETIRED" },
@@ -290,10 +477,10 @@ export class AppController {
 
   @Post("assignments/checkout")
   async checkout(
-    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Req() req: Request,
     @Body() body: { assetId: string; userId: string; dueDate?: string },
   ) {
-    this.ensureAdmin(this.getActor(headers));
+    await this.requireAdmin(req);
     if (!body.assetId || !body.userId) throw new BadRequestException("assetId and userId are required");
 
     const dueAt = body.dueDate ? new Date(body.dueDate) : null;
@@ -335,10 +522,10 @@ export class AppController {
 
   @Post("assignments/return")
   async returnAsset(
-    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Req() req: Request,
     @Body() body: { assetId: string },
   ) {
-    this.ensureAdmin(this.getActor(headers));
+    await this.requireAdmin(req);
     if (!body.assetId) throw new BadRequestException("assetId is required");
 
     return this.prisma.$transaction(async (tx) => {
@@ -381,19 +568,23 @@ export class AppController {
   }
 
   @Get("assignments/active")
-  async activeAssignments(@Query("userId") userId?: string) {
+  async activeAssignments(@Req() req: Request, @Query("userId") userId?: string) {
+    const me = await this.resolveUser(req);
+    const scopedUserId = me.role === "ADMIN" ? userId : me.id;
     return this.prisma.assignment.findMany({
-      where: { returnedAt: null, ...(userId ? { userId } : {}) },
+      where: { returnedAt: null, ...(scopedUserId ? { userId: scopedUserId } : {}) },
       include: { user: true, asset: { include: { categoryRel: true, locationRel: true } } },
       orderBy: { checkedOutAt: "desc" },
     });
   }
 
   @Get("events")
-  async events(@Query("assetId") assetId?: string, @Query("userId") userId?: string) {
+  async events(@Req() req: Request, @Query("assetId") assetId?: string, @Query("userId") userId?: string) {
+    const me = await this.resolveUser(req);
+    const scopedUserId = me.role === "ADMIN" ? userId : me.id;
     const [asset, user] = await Promise.all([
       assetId ? this.prisma.asset.findUnique({ where: { id: assetId } }) : null,
-      userId ? this.prisma.user.findUnique({ where: { id: userId } }) : null,
+      scopedUserId ? this.prisma.user.findUnique({ where: { id: scopedUserId } }) : null,
     ]);
 
     const rawEvents = await this.prisma.event.findMany({
@@ -408,8 +599,46 @@ export class AppController {
     return this.enrichEvents(rawEvents);
   }
 
+  @Post("scan/lookup")
+  async scanLookup(@Req() req: Request, @Body() body: { code?: string }) {
+    await this.resolveUser(req);
+    const code = body.code?.trim();
+    if (!code) throw new BadRequestException("code is required");
+
+    return this.prisma.asset.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { assetTagId: { contains: code, mode: "insensitive" } },
+          { barcode: { contains: code, mode: "insensitive" } },
+          { serial: { contains: code, mode: "insensitive" } },
+          { airtagId: { contains: code, mode: "insensitive" } },
+          { name: { contains: code, mode: "insensitive" } },
+        ],
+      },
+      include: {
+        categoryRel: true,
+        locationRel: true,
+        assignments: {
+          where: { returnedAt: null },
+          include: { user: true },
+          take: 1,
+          orderBy: { checkedOutAt: "desc" },
+        },
+      },
+      take: 20,
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
   @Post("seed")
-  async seed() {
+  async seed(@Req() req: Request) {
+    const userCount = await this.prisma.user.count();
+    if (userCount > 0) {
+      await this.requireAdmin(req);
+    }
+    const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "admin123";
+    const userPassword = process.env.SEED_USER_PASSWORD ?? "user123";
     await this.prisma.$transaction(async (tx) => {
       const [hq, warehouse] = await Promise.all([
         tx.location.upsert({ where: { name: "HQ" }, update: {}, create: { name: "HQ" } }),
@@ -422,18 +651,75 @@ export class AppController {
 
       const admin = await tx.user.upsert({
         where: { userTagId: "ADMIN001" },
-        update: { name: "Admin", role: "ADMIN", isActive: true },
-        create: { name: "Admin", userTagId: "ADMIN001", role: "ADMIN", email: "admin@example.com" },
+        update: {
+          name: "Admin PC",
+          username: "adminpc",
+          passwordHash: this.hashPassword(adminPassword),
+          role: "ADMIN",
+          isActive: true,
+        },
+        create: {
+          name: "Admin PC",
+          username: "adminpc",
+          passwordHash: this.hashPassword(adminPassword),
+          userTagId: "ADMIN001",
+          role: "ADMIN",
+          email: "adminpc@example.com",
+        },
+      });
+      await tx.user.upsert({
+        where: { userTagId: "ADMIN002" },
+        update: {
+          name: "Admin Mobil",
+          username: "adminmobile",
+          passwordHash: this.hashPassword(adminPassword),
+          role: "ADMIN",
+          isActive: true,
+        },
+        create: {
+          name: "Admin Mobil",
+          username: "adminmobile",
+          passwordHash: this.hashPassword(adminPassword),
+          userTagId: "ADMIN002",
+          role: "ADMIN",
+          email: "adminmobile@example.com",
+        },
       });
       const user = await tx.user.upsert({
         where: { userTagId: "U001" },
-        update: { name: "Bruker 1", role: "USER", isActive: true },
-        create: { name: "Bruker 1", userTagId: "U001", role: "USER", email: "bruker1@example.com" },
+        update: {
+          name: "Bruker 1",
+          username: "user1",
+          passwordHash: this.hashPassword(userPassword),
+          role: "USER",
+          isActive: true,
+        },
+        create: {
+          name: "Bruker 1",
+          username: "user1",
+          passwordHash: this.hashPassword(userPassword),
+          userTagId: "U001",
+          role: "USER",
+          email: "bruker1@example.com",
+        },
       });
       await tx.user.upsert({
         where: { userTagId: "U002" },
-        update: { name: "Bruker 2", role: "USER", isActive: true },
-        create: { name: "Bruker 2", userTagId: "U002", role: "USER", email: "bruker2@example.com" },
+        update: {
+          name: "Bruker 2",
+          username: "user2",
+          passwordHash: this.hashPassword(userPassword),
+          role: "USER",
+          isActive: true,
+        },
+        create: {
+          name: "Bruker 2",
+          username: "user2",
+          passwordHash: this.hashPassword(userPassword),
+          userTagId: "U002",
+          role: "USER",
+          email: "bruker2@example.com",
+        },
       });
 
       const drill = await tx.asset.upsert({
@@ -443,6 +729,7 @@ export class AppController {
           category: "Tools",
           categoryId: tools.id,
           locationId: warehouse.id,
+          barcode: "A123",
           status: "AVAILABLE",
           deletedAt: null,
         },
@@ -452,6 +739,7 @@ export class AppController {
           category: "Tools",
           categoryId: tools.id,
           locationId: warehouse.id,
+          barcode: "A123",
           status: "AVAILABLE",
         },
       });
@@ -462,6 +750,7 @@ export class AppController {
           category: "Tools",
           categoryId: tools.id,
           locationId: warehouse.id,
+          barcode: "A124",
           status: "AVAILABLE",
           deletedAt: null,
         },
@@ -471,6 +760,7 @@ export class AppController {
           category: "Tools",
           categoryId: tools.id,
           locationId: warehouse.id,
+          barcode: "A124",
           status: "AVAILABLE",
         },
       });
@@ -481,6 +771,7 @@ export class AppController {
           category: "IT",
           categoryId: it.id,
           locationId: hq.id,
+          barcode: "A125",
           status: "AVAILABLE",
           deletedAt: null,
         },
@@ -490,6 +781,7 @@ export class AppController {
           category: "IT",
           categoryId: it.id,
           locationId: hq.id,
+          barcode: "A125",
           status: "AVAILABLE",
         },
       });
