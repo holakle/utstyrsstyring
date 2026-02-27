@@ -22,6 +22,18 @@ type Actor = {
 export class AppController {
   constructor(private readonly prisma: PrismaService) {}
 
+  private mapPrismaError(error: unknown): never {
+    const knownError = error as { code?: string; meta?: { target?: string[] } } | undefined;
+    if (knownError?.code === "P2002") {
+      const fields = Array.isArray(knownError.meta?.target) ? knownError.meta?.target.join(", ") : "unique field";
+      throw new BadRequestException(`Duplicate value for ${fields}`);
+    }
+    if (knownError?.code === "P2003") {
+      throw new BadRequestException("Invalid relation reference in request");
+    }
+    throw error;
+  }
+
   private getActor(headers: Record<string, string | string[] | undefined>): Actor {
     const roleHeader = headers["x-user-role"];
     const tagHeader = headers["x-user-tag"];
@@ -216,19 +228,25 @@ export class AppController {
     },
   ) {
     this.ensureAdmin(this.getActor(headers));
-    if (!body.name || !body.assetTagId) throw new BadRequestException("name and assetTagId are required");
-    return this.prisma.asset.create({
-      data: {
-        name: body.name,
-        assetTagId: body.assetTagId,
-        status: body.status ?? "AVAILABLE",
-        serial: body.serial,
-        airtagId: body.airtagId,
-        category: body.category,
-        categoryId: body.categoryId,
-        locationId: body.locationId,
-      },
-    });
+    const name = body.name?.trim();
+    const assetTagId = body.assetTagId?.trim();
+    if (!name || !assetTagId) throw new BadRequestException("name and assetTagId are required");
+    try {
+      return await this.prisma.asset.create({
+        data: {
+          name,
+          assetTagId,
+          status: body.status ?? "AVAILABLE",
+          serial: body.serial?.trim() || undefined,
+          airtagId: body.airtagId?.trim() || undefined,
+          category: body.category?.trim() || undefined,
+          categoryId: body.categoryId,
+          locationId: body.locationId,
+        },
+      });
+    } catch (error) {
+      this.mapPrismaError(error);
+    }
   }
 
   @Patch("assets/:id")
