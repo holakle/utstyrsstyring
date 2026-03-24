@@ -68,7 +68,7 @@ Da får du en offentlig `https://...` URL med gyldig sertifikat.
 
 1. Sett root `.env`:
 ```env
-LAN_HOST=192.168.10.103
+LAN_HOST=
 SESSION_COOKIE_SECURE=true
 ```
 
@@ -81,8 +81,8 @@ Get-NetTCPConnection -LocalPort 3000,3001 -State Listen -ErrorAction SilentlyCon
   Select-Object -ExpandProperty OwningProcess -Unique |
   ForEach-Object { taskkill /PID $_ /F }
 
-Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter api start:dev'
-Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter web dev'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd "; pnpm --filter api start:dev'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd ""; pnpm --filter web dev'
 ```
 
 ### Start tunnel (Cloudflare, raskest)
