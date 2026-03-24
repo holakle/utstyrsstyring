@@ -25,18 +25,18 @@ Malkjede:
 ### 1) Sett LAN-host i repo-root `.env`
 
 ```env
-LAN_HOST=192.168.10.123
+LAN_HOST=<din-lokale-ip>
 SESSION_COOKIE_SECURE=true
 ```
 
-Bruk faktisk IPv4-adresse til PC-en din.
+
 
 ### 2) Start tjenester
 
 ```powershell
 docker compose up -d
-Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter api start:dev'
-Start-Process powershell -ArgumentList '-NoExit','-Command','cd "c:\Users\holak\Prosjekter\utstyrsstyring"; pnpm --filter web dev'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd ; pnpm --filter api start:dev'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd ; pnpm --filter web dev'
 ```
 
 ### 3) Eksporter lokal CA fra Caddy og installer på mobil
